@@ -210,6 +210,102 @@ app.MapPost("/activities/{id:int}/delete", async (int id, HttpRequest request) =
     return Results.Redirect(SafeBack(form["back"].ToString()));
 });
 
+ // app.MapGet("/api/customers", () => new CustomerService().GetAll());
+
+// Reference lists
+app.MapGet("/api/statuses", () => Customer.Statuses);
+
+app.MapGet("/api/activity-types", () => Activity.Types);
+
+// Customers: list with optional search and status filter
+app.MapGet("/api/customers", (string? search, string? status) =>
+{
+    return new CustomerService().Search(search, status);
+});
+
+// Returns one customer, or 404 if the id does not exist
+app.MapGet("/api/customers/{id:int}", (int id) =>
+{
+    var customer = new CustomerService().GetById(id);
+    return customer == null ? Results.NotFound() : Results.Ok(customer);
+});
+
+app.MapPost("/api/customers", (Customer customer) =>
+{
+    string error = ValidateApiCustomer(customer);
+    if (error != "")
+        return Results.BadRequest(new { error });
+
+    new CustomerService().Add(customer);
+    return Results.Created($"/api/customers/{customer.Id}", customer);
+});
+
+app.MapPut("/api/customers/{id:int}", (int id, Customer customer) =>
+{
+    string error = ValidateApiCustomer(customer);
+    if (error != "")
+        return Results.BadRequest(new { error });
+
+    customer.Id = id;
+    if (!new CustomerService().Update(customer))
+        return Results.NotFound();
+
+    return Results.Ok(customer);
+});
+
+app.MapDelete("/api/customers/{id:int}", (int id) =>
+{
+    if (!new CustomerService().Delete(id))
+        return Results.NotFound();
+
+    new ActivityService().DeleteByCustomer(id); // the customer's activities go too
+    return Results.NoContent();
+});
+
+// Activities for one customer
+app.MapGet("/api/customers/{id:int}/activities", (int id) =>
+{
+    if (new CustomerService().GetById(id) == null)
+        return Results.NotFound();
+
+    return Results.Ok(new ActivityService().GetByCustomer(id));
+});
+
+app.MapPost("/api/customers/{id:int}/activities", (int id, Activity activity) =>
+{
+    if (new CustomerService().GetById(id) == null)
+        return Results.NotFound();
+
+    if (string.IsNullOrWhiteSpace(activity.Title))
+        return Results.BadRequest(new { error = "Title is required." });
+
+    if (!Activity.Types.Contains(activity.Type))
+        return Results.BadRequest(new { error = "Type must be Meeting, Call, Email or Task." });
+
+    activity.CustomerId = id;
+    activity.Done = false;
+    new ActivityService().Add(activity);
+
+    return Results.Json(activity, statusCode: StatusCodes.Status201Created);
+});
+
+// All activities, or only the open ones with ?open=true
+app.MapGet("/api/activities", (bool? open) =>
+{
+    var service = new ActivityService();
+    return open == true ? service.GetOpen() : service.GetAll();
+});
+
+app.MapPut("/api/activities/{id:int}/done", (int id, DoneRequest request) =>
+{
+    return new ActivityService().SetDone(id, request.Done) ? Results.NoContent() : Results.NotFound();
+});
+
+app.MapDelete("/api/activities/{id:int}", (int id) =>
+{
+    return new ActivityService().Delete(id) ? Results.NoContent() : Results.NotFound();
+});
+
 app.Run();
 
 // ---------- Helpers ----------
@@ -284,6 +380,15 @@ static string Validate(Customer c)
     return "";
 }
 
+// Same rules as the HTML forms, plus a valid status
+static string ValidateApiCustomer(Customer c)
+{
+    if (string.IsNullOrWhiteSpace(c.Name)) return "Name is required.";
+    if (string.IsNullOrEmpty(c.Email) || !c.Email.Contains('@')) return "A valid email is required.";
+    if (!Customer.Statuses.Contains(c.Status)) return "Status must be Lead, Active or Inactive.";
+    return "";
+}
+
 // One table row; the customer column is only shown when a customer is passed in
 static string ActivityRow(Activity a, Customer? customer, string back)
 {
@@ -323,3 +428,6 @@ static string SafeBack(string? back)
 
     return back;
 }
+
+// Request body for PUT /api/activities/{id}/done
+record DoneRequest(bool Done);
